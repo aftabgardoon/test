@@ -32,7 +32,7 @@ from app.database import get_session_factory
 from app.models import Channel, MessageLog, SyncLink
 from app.models.message_log import MessageStatus
 from app.queue import get_queue
-from app.services import cache_service
+from app.services.cache_service import cache_service
 
 _MEDIA_TYPES = {
     MessageType.PHOTO,

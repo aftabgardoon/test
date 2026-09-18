@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
 
     # Warm-up: preload caches and warm HTTP connection pools.
     from app.pollers import build_polling_adapters
-    from app.services import cache_service
+    from app.services.cache_service import cache_service
 
     warm_started = asyncio.get_running_loop().time()
     async with get_session_factory()() as session:

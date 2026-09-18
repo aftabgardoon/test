@@ -19,6 +19,12 @@ os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_tmp.name}"
 os.environ["QUEUE_ENABLED"] = "false"
 os.environ["FERNET_KEY"] = ""
 os.environ["WEBHOOK_SECRET"] = "test-secret"
+os.environ["POLLING_TIMEOUT"] = "15"
+os.environ["POLLING_ENABLED"] = "false"
+os.environ["BALE_BOT_TOKEN"] = ""
+os.environ["RUBIKA_BOT_TOKEN"] = ""
+os.environ["EITAA_BOT_TOKEN"] = ""
+os.environ["MANAGER_BOT_TOKEN"] = ""
 
 
 @pytest.fixture

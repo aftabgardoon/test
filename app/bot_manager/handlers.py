@@ -21,7 +21,8 @@ from app.bot_manager.states import States, state_machine
 from app.models import Channel, SyncLink, User
 from app.models.channel import ChannelRole
 from app.schemas.channel import ChannelCreate
-from app.services import cache_service, channel_service, user_service
+from app.services import channel_service, user_service
+from app.services.cache_service import cache_service
 from app.utils.logger import log_user_event
 
 HELP_TEXT = """\

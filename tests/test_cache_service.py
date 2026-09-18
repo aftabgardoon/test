@@ -7,7 +7,8 @@ import pytest
 from app.models import Channel
 from app.models.channel import ChannelRole
 from app.schemas.channel import ChannelCreate
-from app.services import cache_service, channel_service, user_service
+from app.services import channel_service, user_service
+from app.services.cache_service import cache_service
 
 
 @pytest.fixture
