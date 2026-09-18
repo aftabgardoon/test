@@ -1,0 +1,66 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: syncbot-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://syncbot:syncbot@postgres:5432/syncbot
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_ENABLED: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    container_name: syncbot-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://syncbot:syncbot@postgres:5432/syncbot
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_ENABLED: "true"
+    command: ["python", "-m", "app.workers.sync_worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: syncbot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: syncbot
+      POSTGRES_PASSWORD: syncbot
+      POSTGRES_DB: syncbot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U syncbot -d syncbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: syncbot-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
