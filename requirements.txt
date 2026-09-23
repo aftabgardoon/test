@@ -13,6 +13,10 @@ redis>=5.0,<6.0
 loguru>=0.7,<1.0
 python-multipart>=0.0.9,<1.0
 
+# anonymous-message flows (anon_bot/)
+requests>=2.31,<3.0
+jdatetime>=4.1,<6.0
+
 # dev / test
 pytest>=8.2,<9.0
 pytest-asyncio>=0.23,<1.0

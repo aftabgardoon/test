@@ -36,6 +36,9 @@ target-version = ["py311"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# ``anon_bot/`` is a verbatim copy of the standalone anonymous-message bot;
+# keep it out of linting so it stays byte-for-byte compatible.
+extend-exclude = ["anon_bot"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "W"]

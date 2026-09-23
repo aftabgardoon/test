@@ -18,3 +18,6 @@ build/
 .idea/
 .vscode/
 *.log
+
+# Runtime data of the bundled anonymous-message bot
+anon_bot/data/

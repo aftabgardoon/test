@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 import pytest
 
+from app import anon_bridge
 from app.adapters import BaleAdapter
 from app.bot_manager import handlers
 from app.bot_manager import keyboards as kb
@@ -124,7 +125,7 @@ async def test_public_start_shows_anonymous_intro(
         btn for row in msg["reply_markup"]["inline_keyboard"] for btn in row
     ]
     assert buttons[0]["text"] == "🔗 لینک ناشناس"
-    assert buttons[0]["url"] == get_settings().anonymous_bot_url
+    assert buttons[0]["callback_data"] == anon_bridge.ANON_PANEL
 
 
 async def test_secret_unlocks_the_bot(
@@ -178,3 +179,58 @@ async def test_empty_secret_disables_the_gate(
     monkeypatch.setattr(get_settings(), "manager_access_secret", "")
     await drive(db_session, adapter, fake_api.text_update("/mychannels"))
     assert len(fake_api.sent) == 1
+
+
+# ----------------------------------------------------------------------
+# Routing: anonymous flows are public, sync flows are gated
+# ----------------------------------------------------------------------
+@pytest.fixture
+def anon_spy(monkeypatch):
+    calls = {"message": [], "callback": []}
+
+    async def fake_message(chat_id, user_id, text, msg):
+        calls["message"].append((user_id, text))
+
+    async def fake_callback(data, callback_id, user_id, message_id, chat_id):
+        calls["callback"].append(data)
+
+    monkeypatch.setattr(anon_bridge, "handle_message", fake_message)
+    monkeypatch.setattr(anon_bridge, "handle_callback", fake_callback)
+    return calls
+
+
+async def test_plain_text_goes_to_anon(
+    db_session, fake_api, adapter, clean_states, gate_on, anon_spy
+):
+    await drive(db_session, adapter, fake_api.text_update("سلام"))
+    assert anon_spy["message"] == [("111", "سلام")]
+    assert fake_api.sent == []
+
+
+async def test_start_deeplink_goes_to_anon(
+    db_session, fake_api, adapter, clean_states, gate_on, anon_spy
+):
+    await drive(db_session, adapter, fake_api.text_update("/start anon_ABC123"))
+    assert anon_spy["message"] == [("111", "/start anon_ABC123")]
+
+
+async def test_anon_callback_is_public(
+    db_session, fake_api, adapter, clean_states, gate_on, anon_spy
+):
+    await drive(db_session, adapter, fake_api.callback_update("anol_list"))
+    assert anon_spy["callback"] == ["anol_list"]
+
+
+async def test_anon_panel_button_opens_panel(
+    db_session, fake_api, adapter, clean_states, gate_on, anon_spy
+):
+    await drive(db_session, adapter, fake_api.callback_update(anon_bridge.ANON_PANEL))
+    assert anon_spy["callback"] == [anon_bridge.ANON_PANEL]
+
+
+async def test_unauthorized_sync_command_not_forwarded(
+    db_session, fake_api, adapter, clean_states, gate_on, anon_spy
+):
+    await drive(db_session, adapter, fake_api.text_update("/addchannel"))
+    assert anon_spy["message"] == []
+    assert fake_api.sent == []

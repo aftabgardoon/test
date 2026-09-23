@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app import anon_bridge
 from app.adapters import (
     AbstractAdapter,
     AdapterError,
@@ -111,8 +112,24 @@ _CMD_ROUTES = {
 # ``MANAGER_ACCESS_SECRET`` is configured).
 SECRET_COMMAND = "/rsasecret"
 
+# Sync-manager text commands (gated behind /RSAsecret).  Anything else in a
+# private chat is handled by the public anonymous-message flows.
+_SYNC_COMMANDS = {
+    "/help",
+    "/addchannel",
+    "/mychannels",
+    "/setsource",
+    "/adddest",
+    "/links",
+    "/pause",
+    "/resume",
+    "/status",
+    "/settoken",
+}
+
 # Public landing shown to everyone who sends /start.  This is the intro of the
-# anonymous-message ("درگوشی") bot, so the /start reply matches that bot.
+# anonymous-message ("درگوشی") bot; the button under it opens the anonymous
+# panel inside *this* bot (no redirect).
 PUBLIC_START_TEXT = """\
 👻 *ربات لینک ناشناس*
 
@@ -128,14 +145,15 @@ async def _handle_public_start(
     chat_id: str,
 ) -> None:
     """Send the anonymous-bot intro for the public ``/start`` command."""
-    url = get_settings().anonymous_bot_url
-    keyboard = None
-    if url:
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🔗 لینک ناشناس", url=url)]
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔗 لینک ناشناس", callback_data=anon_bridge.ANON_PANEL
+                )
             ]
-        )
+        ]
+    )
     await _send(adapter, chat_id, PUBLIC_START_TEXT, keyboard)
 
 
@@ -189,12 +207,9 @@ async def handle_update(
 ) -> None:
     """Route a single raw update to the correct handler."""
     if "callback_query" in update:
-        cb = update["callback_query"]
-        cb_sender = cb.get("from") or {}
-        cb_user_id = str(cb_sender.get("id", ""))
-        if not cb_user_id or not await _is_allowed(session, platform, cb_user_id):
-            return
-        await _handle_callback(session, adapter, platform, cb)
+        await _handle_callback_update(
+            session, adapter, platform, update["callback_query"]
+        )
         return
 
     msg = update.get("message") or update.get("channel_post")
@@ -210,46 +225,97 @@ async def handle_update(
     if not chat_id or not user_id:
         return
 
+    chat_type = chat.get("type")
+
+    # Groups are handled by the anonymous bot's reply/edit flows only.
+    if chat_type in ("group", "supergroup"):
+        await anon_bridge.handle_group_message(
+            chat_id, user_id, text, str(msg.get("message_id", "")), msg
+        )
+        return
+
     # The manager UI only talks to *private* chats.  When the manager bot is
     # also a source-listening bot (same token, admin of the source channel)
     # channel posts arrive here too; they must never be answered as user
     # input (that would post replies into the channel).
-    chat_type = chat.get("type")
     if chat_type is not None and chat_type != "private":
         return
 
-    # The secret command and the public /start landing work even before the
-    # user is authorized; everything else is hidden behind the gate.
+    command: str | None = None
     if text.startswith("/"):
         command = text.split()[0].lower().split("@")[0]
+
+        # The secret command unlocks the sync manager; /start is the public
+        # anonymous-bot landing.  Both work before authorization.
         if command == SECRET_COMMAND:
             await _handle_secret_command(
                 session, adapter, platform, user_id, chat_id, text
             )
             return
         if command == "/start":
-            await _handle_public_start(adapter, chat_id)
+            # Deep links (/start anon_TOKEN) continue the anonymous flow.
+            if text.startswith("/start anon_"):
+                await anon_bridge.handle_message(chat_id, user_id, text, msg)
+            else:
+                await _handle_public_start(adapter, chat_id)
             return
 
-    # Everything else is hidden from users who have not unlocked the bot.
-    if not await _is_allowed(session, platform, user_id):
-        logger.info(
-            "Ignored manager update from unauthorized user platform={} user={}",
-            platform,
-            user_id,
+    # Sync-manager commands are gated behind /RSAsecret.
+    if command in _SYNC_COMMANDS:
+        if not await _is_allowed(session, platform, user_id):
+            logger.info(
+                "Ignored sync command from unauthorized user platform={} user={}",
+                platform,
+                user_id,
+            )
+            return
+        user = await user_service.get_or_create_user(
+            session, platform, user_id, sender.get("username")
         )
-        return
-
-    user = await user_service.get_or_create_user(
-        session, platform, user_id, sender.get("username")
-    )
-    ctx = state_machine.get(platform, user_id)
-
-    if text.startswith("/"):
         await _handle_command(session, adapter, platform, user, chat_id, text)
         return
 
-    await _handle_text(session, adapter, platform, user, chat_id, text, ctx)
+    # Everything else belongs to the public anonymous-message flows.  An
+    # authorized admin in the middle of a sync conversation (e.g. waiting for
+    # a channel id) keeps talking to the sync manager.
+    if await _is_allowed(session, platform, user_id):
+        user = await user_service.get_or_create_user(
+            session, platform, user_id, sender.get("username")
+        )
+        ctx = state_machine.get(platform, user_id)
+        if ctx.state != States.IDLE:
+            await _handle_text(session, adapter, platform, user, chat_id, text, ctx)
+            return
+
+    await anon_bridge.handle_message(chat_id, user_id, text, msg)
+
+
+async def _handle_callback_update(
+    session: AsyncSession,
+    adapter: AbstractAdapter,
+    platform: str,
+    cb: dict[str, Any],
+) -> None:
+    """Route a callback query to the anonymous bot or the sync manager."""
+    data = cb.get("data") or ""
+    cb_id = cb.get("id", "")
+    sender = cb.get("from") or {}
+    user_id = str(sender.get("id", ""))
+    if not user_id:
+        return
+    cb_msg = cb.get("message") or {}
+    chat_id = str(cb_msg.get("chat", {}).get("id", "") or user_id)
+    message_id = str(cb_msg.get("message_id", "")) or None
+
+    # Anonymous-bot buttons are public (no unlock required).
+    if anon_bridge.is_anon_callback(data):
+        await anon_bridge.handle_callback(data, cb_id, user_id, message_id, chat_id)
+        return
+
+    # Sync-manager buttons stay behind the gate.
+    if not await _is_allowed(session, platform, user_id):
+        return
+    await _handle_callback(session, adapter, platform, cb)
 
 
 # ----------------------------------------------------------------------

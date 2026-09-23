@@ -46,9 +46,6 @@ class Settings(BaseSettings):
     # default "RSAsecret") before they see any menu or reply.  Set to an empty
     # string to disable the gate (everyone allowed).
     manager_access_secret: str = "RSAsecret"
-    # Public /start landing: the anonymous-message ("درگوشی") bot intro shown
-    # to everyone who sends /start.  Empty disables the public landing.
-    anonymous_bot_url: str = "https://ble.ir/daregooshi_bot"
 
     # --- Source listener bots (used by the pollers) ---
     bale_bot_token: str = ""
