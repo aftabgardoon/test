@@ -104,12 +104,27 @@ async def drive(db_session, adapter, update):
 async def test_unauthorized_user_sees_nothing(
     db_session, fake_api, adapter, clean_states, gate_on
 ):
-    await drive(db_session, adapter, fake_api.text_update("/start"))
+    await drive(db_session, adapter, fake_api.text_update("/mychannels"))
     assert fake_api.sent == []
 
     await drive(db_session, adapter, fake_api.callback_update(kb.CMD_ADDCHANNEL))
     assert fake_api.sent == []
     assert fake_api.answered == []
+
+
+async def test_public_start_shows_anonymous_intro(
+    db_session, fake_api, adapter, clean_states, gate_on
+):
+    """/start is public: it shows the anonymous-bot intro to everyone."""
+    await drive(db_session, adapter, fake_api.text_update("/start"))
+    assert len(fake_api.sent) == 1
+    msg = fake_api.sent[-1]
+    assert msg["text"] == handlers.PUBLIC_START_TEXT
+    buttons = [
+        btn for row in msg["reply_markup"]["inline_keyboard"] for btn in row
+    ]
+    assert buttons[0]["text"] == "🔗 لینک ناشناس"
+    assert buttons[0]["url"] == get_settings().anonymous_bot_url
 
 
 async def test_secret_unlocks_the_bot(
@@ -124,8 +139,8 @@ async def test_secret_unlocks_the_bot(
     ]
     assert kb.CMD_ADDCHANNEL in datas
 
-    # Now the normal UI is reachable.
-    await drive(db_session, adapter, fake_api.text_update("/start"))
+    # The normal UI is reachable after unlocking.
+    await drive(db_session, adapter, fake_api.text_update("/mychannels"))
     assert len(fake_api.sent) == 2
 
 
@@ -161,5 +176,5 @@ async def test_empty_secret_disables_the_gate(
     db_session, fake_api, adapter, clean_states, monkeypatch
 ):
     monkeypatch.setattr(get_settings(), "manager_access_secret", "")
-    await drive(db_session, adapter, fake_api.text_update("/start"))
+    await drive(db_session, adapter, fake_api.text_update("/mychannels"))
     assert len(fake_api.sent) == 1

@@ -132,6 +132,7 @@ alembic upgrade head
 | `MANAGER_BOT_TOKEN` | توکن ربات مدیریت (می‌تواند با `BALE_BOT_TOKEN` یکی باشد؛ حالت تک‌بات) | — |
 | `MANAGER_BOT_PLATFORM` | پلتفرم ربات مدیریت | `bale` |
 | `MANAGER_ACCESS_SECRET` | رمز باز کردن رابط ربات مدیریت؛ کاربر باید `/RSAsecret <value>` بفرستد. خالی = بدون قفل | `RSAsecret` |
+| `ANONYMOUS_BOT_URL` | لینک ربات پیام ناشناس (درگوشی) که در پاسخ `/start` نمایش داده می‌شود | `https://ble.ir/daregooshi_bot` |
 | `BALE_BOT_TOKEN` | توکن ربات شنوندهٔ بله (باید ادمین کانال مبدأ باشد) | — |
 | `RUBIKA_BOT_TOKEN` | توکن ربات شنوندهٔ روبیکا | — |
 | `EITAA_BOT_TOKEN` | توکن ربات ایتا (فقط مقصد) | — |
@@ -186,6 +187,12 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 > ⚠️ دستور `/RSAsecret` در چت خصوصی کار می‌کند؛ پست‌های کانال هرگز به‌عنوان ورودی
 > مدیر پاسخ داده نمی‌شوند.
+
+### پیام `/start` (لندینگ عمومی)
+
+- `/start` برای همه (حتی بدون قفل) پیام معرفی ربات پیام ناشناس (درگوشی) را نشان
+  می‌دهد، همراه دکمه «🔗 لینک ناشناس» که به `ANONYMOUS_BOT_URL` می‌رود.
+- `/RSAsecret` پس از باز کردن قفل، پیام اول/منوی ربات همگام‌سازی را نشان می‌دهد.
 
 ---
 

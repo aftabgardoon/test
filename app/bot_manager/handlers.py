@@ -18,6 +18,7 @@ from sqlalchemy.orm import selectinload
 from app.adapters import (
     AbstractAdapter,
     AdapterError,
+    InlineKeyboardButton,
     InlineKeyboardMarkup,
     platform_supports_source,
 )
@@ -110,6 +111,33 @@ _CMD_ROUTES = {
 # ``MANAGER_ACCESS_SECRET`` is configured).
 SECRET_COMMAND = "/rsasecret"
 
+# Public landing shown to everyone who sends /start.  This is the intro of the
+# anonymous-message ("درگوشی") bot, so the /start reply matches that bot.
+PUBLIC_START_TEXT = """\
+👻 *ربات لینک ناشناس*
+
+با این ربات میتونی لینک ناشناس بسازی و از دوستات نظر و پیام ناشناس بگیری.
+
+🔗 *لینک ناشناس:* یه لینک بساز، بفرست برای دوستات تا ناشناس بهت پیام بدن.
+
+📌 برای شروع، روی دکمه «🔗 لینک ناشناس» بزن."""
+
+
+async def _handle_public_start(
+    adapter: AbstractAdapter,
+    chat_id: str,
+) -> None:
+    """Send the anonymous-bot intro for the public ``/start`` command."""
+    url = get_settings().anonymous_bot_url
+    keyboard = None
+    if url:
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🔗 لینک ناشناس", url=url)]
+            ]
+        )
+    await _send(adapter, chat_id, PUBLIC_START_TEXT, keyboard)
+
 
 async def _is_allowed(
     session: AsyncSession, platform: str, user_id: str
@@ -190,13 +218,17 @@ async def handle_update(
     if chat_type is not None and chat_type != "private":
         return
 
-    # The secret command must work even before the user is authorized.
+    # The secret command and the public /start landing work even before the
+    # user is authorized; everything else is hidden behind the gate.
     if text.startswith("/"):
         command = text.split()[0].lower().split("@")[0]
         if command == SECRET_COMMAND:
             await _handle_secret_command(
                 session, adapter, platform, user_id, chat_id, text
             )
+            return
+        if command == "/start":
+            await _handle_public_start(adapter, chat_id)
             return
 
     # Everything else is hidden from users who have not unlocked the bot.

@@ -183,9 +183,9 @@ async def register_channel(db_session, fake_api, adapter, username: str) -> None
 # Button flows
 # ----------------------------------------------------------------------
 async def test_full_button_flow(db_session, fake_api, adapter, clean_states):
-    """/start → add channels → setsource → adddest → pause (all buttons)."""
-    # --- /start sends the main menu
-    await drive(db_session, adapter, fake_api.text_update("/start"))
+    """/RSAsecret → add channels → setsource → adddest → pause (all buttons)."""
+    # --- /RSAsecret sends the manager welcome + main menu
+    await drive(db_session, adapter, fake_api.text_update("/RSAsecret"))
     datas = fake_api.callback_datas(fake_api.last_message())
     assert kb.CMD_ADDCHANNEL in datas
     assert kb.CMD_MYCHANNELS in datas
@@ -522,10 +522,10 @@ async def test_run_manager_single_bot_mode(db_session, fake_api, clean_states, m
 
     monkeypatch.setattr(sync_service, "get_queue", lambda: _Q())
 
-    # One source-channel post + one private /start, then idle.
+    # One source-channel post + one private /RSAsecret, then idle.
     fake_api.updates = [
         fake_api.channel_post_update("hello from source", chat_id=500),
-        fake_api.text_update("/start"),
+        fake_api.text_update("/RSAsecret"),
     ]
 
     settings = get_settings()
@@ -555,8 +555,8 @@ async def test_run_manager_single_bot_mode(db_session, fake_api, clean_states, m
     assert enqueued[0]["source_channel_id"] == src.id
     assert enqueued[0]["sync_link_ids"], "job must carry the matching link ids"
 
-    # The private /start was answered by the manager UI (with a menu).
-    assert fake_api.sent, "manager should have answered /start"
+    # The private /RSAsecret was answered by the manager UI (with a menu).
+    assert fake_api.sent, "manager should have answered /RSAsecret"
     menu = fake_api.last_message()
     assert kb.CMD_ADDCHANNEL in fake_api.callback_datas(menu)
 
