@@ -20,6 +20,7 @@ class States:
     AWAIT_SOURCE_SELECT = "await_source_select"
     AWAIT_DEST_SELECT = "await_dest_select"
     AWAIT_LINK_TOGGLE = "await_link_toggle"
+    CONFIRM_DELETE_CHANNEL = "confirm_delete_channel"
 
 
 @dataclass
@@ -46,11 +47,29 @@ class StateMachine:
             self._users[key] = UserContext()
         return self._users[key]
 
-    def set_state(self, platform: str, user_id: str, state: str, **data: Any) -> None:
-        """Set the state and optionally merge context data."""
+    def set_state(
+        self,
+        platform: str,
+        user_id: str,
+        state: str,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        """Set the state, replacing any stale context data from a previous flow.
+
+        Data is *replaced* (not merged) so that e.g. a leftover ``source_id``
+        from an interrupted ``/adddest`` flow can never leak into a fresh
+        ``/setsource`` flow.
+
+        ``data`` is an explicit dict (not ``**kwargs``) on purpose: a
+        ``**data`` signature collides with the ``platform``/``user_id``
+        parameter names — ``set_state(p, u, s, platform="bale")`` raised a
+        ``TypeError`` that silently killed the platform-picker buttons.
+        """
         ctx = self.get(platform, user_id)
         ctx.state = state
-        ctx.data.update(data)
+        ctx.data.clear()
+        if data:
+            ctx.data.update(data)
 
     def reset(self, platform: str, user_id: str) -> None:
         """Clear the user's state and data."""

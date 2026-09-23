@@ -87,6 +87,7 @@ class IncomingMessage(BaseModel):
 
     message_id: str
     chat_id: str
+    chat_username: str | None = None
     from_user_id: str | None = None
     text: str | None = None
     caption: str | None = None
@@ -255,6 +256,31 @@ class AbstractAdapter(ABC):
         parse_mode: str | None = None,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> str: ...
+
+    async def send_audio(
+        self,
+        chat_id: str,
+        file_id_or_bytes: str | bytes,
+        *,
+        filename: str | None = None,
+        caption: str | None = None,
+        parse_mode: str | None = None,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> str:
+        """Send an audio file (music).
+
+        Default implementation degrades to :meth:`send_document` for
+        platforms without a dedicated audio method.  Bale and Rubika
+        override this with their native ``sendAudio`` / ``Music`` upload.
+        """
+        return await self.send_document(
+            chat_id,
+            file_id_or_bytes,
+            filename=filename or "audio",
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
 
     @abstractmethod
     async def send_sticker(

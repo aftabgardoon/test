@@ -47,7 +47,7 @@ class MemoryQueue(BaseQueue):
     async def dequeue(self, timeout: float = 1.0) -> dict[str, Any] | None:
         try:
             return await asyncio.wait_for(self._queue.get(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     async def close(self) -> None:
@@ -67,7 +67,8 @@ class RedisQueue(BaseQueue):
         await self._redis.lpush(self._key, json.dumps(item))
 
     async def dequeue(self, timeout: float = 1.0) -> dict[str, Any] | None:
-        result = await self._redis.brpop(self._key, timeout=int(timeout))
+        # BRPOP treats timeout=0 as "block forever" — clamp to at least 1s.
+        result = await self._redis.brpop(self._key, timeout=max(1, int(timeout)))
         if result is None:
             return None
         return json.loads(result[1])

@@ -58,7 +58,9 @@ async def dest_channel(db_session, user):
     return await channel_service.add_channel(
         db_session,
         user.id,
-        ChannelCreate(platform="eitaa", platform_channel_id="200", title="Dest", role="destination"),
+        ChannelCreate(
+            platform="eitaa", platform_channel_id="200", title="Dest", role="destination"
+        ),
     )
 
 
@@ -84,7 +86,9 @@ async def test_handle_incoming_enqueues(db_session, source_channel, sync_link, m
     queue = MemoryQueue()
     monkeypatch.setattr(sync_service, "get_queue", lambda: queue)
 
-    incoming = IncomingMessage(message_id="5", chat_id="100", text="hi", message_type=MessageType.TEXT)
+    incoming = IncomingMessage(
+        message_id="5", chat_id="100", text="hi", message_type=MessageType.TEXT
+    )
     count = await sync_service.handle_incoming(db_session, "bale", incoming)
     assert count == 1
 
@@ -97,8 +101,59 @@ async def test_handle_incoming_enqueues(db_session, source_channel, sync_link, m
 async def test_handle_incoming_ignores_unknown_channel(db_session, monkeypatch) -> None:
     queue = MemoryQueue()
     monkeypatch.setattr(sync_service, "get_queue", lambda: queue)
-    incoming = IncomingMessage(message_id="5", chat_id="999", text="hi", message_type=MessageType.TEXT)
+    incoming = IncomingMessage(
+        message_id="5", chat_id="999", text="hi", message_type=MessageType.TEXT
+    )
     assert await sync_service.handle_incoming(db_session, "bale", incoming) == 0
+
+
+async def test_handle_incoming_matches_source_by_username(
+    db_session, user, monkeypatch
+) -> None:
+    """A source registered as ``@username`` must match an update with numeric id."""
+    source = await channel_service.add_channel(
+        db_session,
+        user.id,
+        ChannelCreate(
+            platform="bale",
+            platform_channel_id="@srcchan",
+            title="srcchan",
+            role="source",
+        ),
+    )
+    dest = await channel_service.add_channel(
+        db_session,
+        user.id,
+        ChannelCreate(
+            platform="eitaa",
+            platform_channel_id="@dstchan",
+            role="destination",
+        ),
+    )
+    link = SyncLink(
+        user_id=user.id,
+        source_channel_id=source.id,
+        destination_channel_id=dest.id,
+        is_active=True,
+    )
+    db_session.add(link)
+    await db_session.commit()
+    await db_session.refresh(link)
+
+    queue = MemoryQueue()
+    monkeypatch.setattr(sync_service, "get_queue", lambda: queue)
+
+    incoming = IncomingMessage(
+        message_id="5",
+        chat_id="5347185840",
+        chat_username="srcchan",
+        text="hi",
+        message_type=MessageType.TEXT,
+    )
+    assert await sync_service.handle_incoming(db_session, "bale", incoming) == 1
+    job = await queue.dequeue(timeout=0.1)
+    assert job is not None
+    assert job["sync_link_ids"] == [link.id]
 
 
 async def test_handle_incoming_respects_filters(
@@ -109,7 +164,9 @@ async def test_handle_incoming_respects_filters(
     sync_link.filters = {"message_types": ["photo"]}
     await db_session.commit()
 
-    incoming = IncomingMessage(message_id="5", chat_id="100", text="hi", message_type=MessageType.TEXT)
+    incoming = IncomingMessage(
+        message_id="5", chat_id="100", text="hi", message_type=MessageType.TEXT
+    )
     assert await sync_service.handle_incoming(db_session, "bale", incoming) == 0
 
 
@@ -133,7 +190,9 @@ async def test_process_job_delivers_text(db_session, sync_link, monkeypatch) -> 
 
     monkeypatch.setattr(sync_service, "_adapter_for", fake_adapter)
 
-    incoming = IncomingMessage(message_id="5", chat_id="100", text="hi", message_type=MessageType.TEXT)
+    incoming = IncomingMessage(
+        message_id="5", chat_id="100", text="hi", message_type=MessageType.TEXT
+    )
     job = {"message": incoming.model_dump(mode="json"), "sync_link_ids": [sync_link.id]}
 
     await sync_service.process_job(db_session, job)
@@ -155,8 +214,12 @@ async def test_process_job_delivers_parallel(db_session, user, source_channel, m
         db_session, user.id,
         ChannelCreate(platform="eitaa", platform_channel_id="300", role="destination"),
     )
-    l1 = SyncLink(user_id=user.id, source_channel_id=source_channel.id, destination_channel_id=d1.id)
-    l2 = SyncLink(user_id=user.id, source_channel_id=source_channel.id, destination_channel_id=d2.id)
+    l1 = SyncLink(
+        user_id=user.id, source_channel_id=source_channel.id, destination_channel_id=d1.id
+    )
+    l2 = SyncLink(
+        user_id=user.id, source_channel_id=source_channel.id, destination_channel_id=d2.id
+    )
     db_session.add_all([l1, l2])
     await db_session.commit()
     await db_session.refresh(l1)
@@ -169,7 +232,9 @@ async def test_process_job_delivers_parallel(db_session, user, source_channel, m
 
     monkeypatch.setattr(sync_service, "_adapter_for", fake_adapter)
 
-    incoming = IncomingMessage(message_id="5", chat_id="100", text="hi", message_type=MessageType.TEXT)
+    incoming = IncomingMessage(
+        message_id="5", chat_id="100", text="hi", message_type=MessageType.TEXT
+    )
     job = {"message": incoming.model_dump(mode="json"), "sync_link_ids": [l1.id, l2.id]}
 
     await sync_service.process_job(db_session, job)
@@ -192,7 +257,9 @@ async def test_process_job_records_failure(db_session, sync_link, monkeypatch) -
     monkeypatch.setattr(sync_service, "_adapter_for", fake_adapter)
     monkeypatch.setattr(sync_service.get_settings(), "retry_attempts", 1)
 
-    incoming = IncomingMessage(message_id="5", chat_id="100", text="hi", message_type=MessageType.TEXT)
+    incoming = IncomingMessage(
+        message_id="5", chat_id="100", text="hi", message_type=MessageType.TEXT
+    )
     job = {"message": incoming.model_dump(mode="json"), "sync_link_ids": [sync_link.id]}
 
     await sync_service.process_job(db_session, job)

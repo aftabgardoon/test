@@ -49,6 +49,29 @@ _FILE_TYPES = {
     MessageType.STICKER: "Image",
 }
 
+# Heuristic mapping of file-name extensions to the canonical message type
+# (the Rubika File model only carries file_id / file_name / size, no MIME).
+_IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "bmp"}
+_VIDEO_EXTS = {"mp4", "mov"}
+_VOICE_EXTS = {"mp3", "ogg"}  # Rubika voice messages are short mp3/ogg clips
+_MUSIC_EXTS = {"m4a", "flac", "wav", "aac"}
+
+
+def _guess_message_type(file_name: str | None) -> MessageType:
+    """Best-effort message type from a file name (Rubika file messages)."""
+    if not file_name or "." not in file_name:
+        return MessageType.DOCUMENT
+    ext = file_name.rsplit(".", 1)[-1].lower()
+    if ext in _IMAGE_EXTS:
+        return MessageType.PHOTO
+    if ext in _VIDEO_EXTS:
+        return MessageType.VIDEO
+    if ext in _VOICE_EXTS:
+        return MessageType.VOICE
+    if ext in _MUSIC_EXTS:
+        return MessageType.AUDIO
+    return MessageType.DOCUMENT
+
 
 def _to_keypad(markup: InlineKeyboardMarkup | None) -> dict[str, Any] | None:
     """Convert an inline keyboard to Rubika's ``Keypad`` structure."""
@@ -88,6 +111,37 @@ class RubikaAdapter(BaseHTTPAdapter):
     def _api_url(self, method: str) -> str:
         return f"{self.base_url}/{self.token}/{method}"
 
+    def _parse_response(self, resp: httpx.Response) -> dict[str, Any]:
+        """Validate a Rubika response and return its JSON body.
+
+        Rubika wraps every payload in ``{"status": "OK", "data": {...}}`` and
+        signals failures with a non-``OK`` ``status`` while still returning
+        HTTP 200 (e.g. ``{"status": "INVALID_ACCESS"}``).  The base
+        implementation only understands Bale's ``ok`` flag, so without this
+        override a Rubika error would be silently treated as success and the
+        destination message id would come back empty.
+        """
+        if resp.status_code >= 400:
+            raise AdapterError(f"Rubika HTTP {resp.status_code}: {resp.text[:300]}")
+        try:
+            data = _loads(resp.content)
+        except ValueError as exc:
+            raise AdapterError(f"Rubika returned non-JSON: {resp.text[:200]}") from exc
+        if not isinstance(data, dict):
+            return {"data": data}
+        status = data.get("status")
+        if isinstance(status, str) and status.upper() != "OK":
+            raise AdapterError(f"Rubika API error: {data.get('error') or status}")
+        if data.get("ok") is False:
+            raise AdapterError(f"Rubika API error: {data.get('description', data)}")
+        return data
+
+    async def _post(self, method: str, **kwargs: Any) -> dict[str, Any]:
+        """POST and return the inner ``data`` object (Rubika wraps results)."""
+        payload = await super()._post(method, **kwargs)
+        inner = payload.get("data") if isinstance(payload, dict) else None
+        return inner if isinstance(inner, dict) else payload
+
     # ------------------------------------------------------------------
     # Sending
     # ------------------------------------------------------------------
@@ -113,6 +167,7 @@ class RubikaAdapter(BaseHTTPAdapter):
         file_bytes: bytes,
         caption: str | None,
         file_type: str,
+        filename: str = "file",
     ) -> str:
         """Upload a file (``requestSendFile`` → ``upload_url``) then ``sendFile``."""
         request = await self._post("requestSendFile", type=file_type)
@@ -120,8 +175,10 @@ class RubikaAdapter(BaseHTTPAdapter):
         file_id = request.get("file_id")
 
         if upload_url:
+            # Per the docs the file must be posted as multipart/form-data in
+            # a field named "file" (a raw body is not accepted).
             await self._limiter.acquire()
-            resp = await self.client.post(upload_url, content=file_bytes)
+            resp = await self.client.post(upload_url, files={"file": (filename, file_bytes)})
             if resp.status_code >= 400:
                 raise AdapterError(f"Rubika upload failed: HTTP {resp.status_code}")
             if not file_id and resp.content:
@@ -150,7 +207,7 @@ class RubikaAdapter(BaseHTTPAdapter):
     ) -> str:
         del parse_mode, reply_markup
         return await self._send_file(
-            chat_id, self._require_bytes(file_id_or_bytes), caption, "Image"
+            chat_id, self._require_bytes(file_id_or_bytes), caption, "Image", "photo.jpg"
         )
 
     async def send_video(
@@ -164,7 +221,7 @@ class RubikaAdapter(BaseHTTPAdapter):
     ) -> str:
         del parse_mode, reply_markup
         return await self._send_file(
-            chat_id, self._require_bytes(file_id_or_bytes), caption, "Video"
+            chat_id, self._require_bytes(file_id_or_bytes), caption, "Video", "video.mp4"
         )
 
     async def send_voice(
@@ -177,7 +234,7 @@ class RubikaAdapter(BaseHTTPAdapter):
     ) -> str:
         del reply_markup
         return await self._send_file(
-            chat_id, self._require_bytes(file_id_or_bytes), caption, "Voice"
+            chat_id, self._require_bytes(file_id_or_bytes), caption, "Voice", "voice.ogg"
         )
 
     async def send_document(
@@ -190,14 +247,33 @@ class RubikaAdapter(BaseHTTPAdapter):
         parse_mode: str | None = None,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> str:
-        del filename, parse_mode, reply_markup
+        del parse_mode, reply_markup
+        name = filename or "document"
         return await self._send_file(
-            chat_id, self._require_bytes(file_id_or_bytes), caption, "File"
+            chat_id, self._require_bytes(file_id_or_bytes), caption, "File", name
         )
 
     async def send_sticker(self, chat_id: str, file_id_or_bytes: str | bytes) -> str:
         return await self._send_file(
-            chat_id, self._require_bytes(file_id_or_bytes), None, "Image"
+            chat_id, self._require_bytes(file_id_or_bytes), None, "Image", "sticker.webp"
+        )
+
+    async def send_audio(
+        self,
+        chat_id: str,
+        file_id_or_bytes: str | bytes,
+        *,
+        filename: str | None = None,
+        caption: str | None = None,
+        parse_mode: str | None = None,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> str:
+        # FileTypeEnum: Music = mp3 song.  The uploaded name must keep an
+        # audio extension so Rubika treats it as music, not a generic file.
+        del parse_mode, reply_markup
+        name = (filename or "audio").rsplit(".", 1)[0] + ".mp3"
+        return await self._send_file(
+            chat_id, self._require_bytes(file_id_or_bytes), caption, "Music", name
         )
 
     async def send_location(
@@ -297,11 +373,11 @@ class RubikaAdapter(BaseHTTPAdapter):
         update_type = update.get("type", "")
         if update_type == "NewMessage":
             return [self._parse_message(update.get("chat_id", ""), update.get("new_message") or {})]
-        if update_type == "UpdatedMessage":
-            return [
-                self._parse_message(update.get("chat_id", ""), update.get("updated_message") or {})
-            ]
-        # RemovedMessage / StartedBot / StoppedBot / EventData are not synced.
+        # "UpdatedMessage" is intentionally NOT emitted here: re-posting it as
+        # a new message would duplicate the post in destination channels.
+        # The poller routes edits to ``sync_service.handle_edit`` instead.
+        # RemovedMessage / StartedBot / StoppedBot / EventData are likewise
+        # handled by the poller (or ignored).
         return []
 
     def _parse_message(self, chat_id: str, msg: dict[str, Any]) -> IncomingMessage:
@@ -311,24 +387,34 @@ class RubikaAdapter(BaseHTTPAdapter):
         sticker = msg.get("sticker") or {}
         poll = msg.get("poll")
 
-        if text is not None:
-            message_type = MessageType.TEXT
-            file_id = None
-        elif sticker:
+        # Order matters: media fields take precedence over ``text``.  A Rubika
+        # media message carries its caption in ``text`` alongside ``file``;
+        # treating such a message as plain text (the old behaviour) dropped
+        # the media entirely and synced only the caption.
+        if sticker:
             message_type = MessageType.STICKER
             file_id = (sticker.get("file") or {}).get("file_id")
+            caption = text
         elif location:
             message_type = MessageType.LOCATION
             file_id = None
+            caption = None
         elif poll:
             message_type = MessageType.POLL
             file_id = None
+            caption = None
         elif file_info:
-            message_type = MessageType.DOCUMENT
+            message_type = _guess_message_type(file_info.get("file_name"))
             file_id = file_info.get("file_id")
+            caption = text
+        elif text is not None:
+            message_type = MessageType.TEXT
+            file_id = None
+            caption = None
         else:
             message_type = MessageType.OTHER
             file_id = None
+            caption = None
 
         parsed_location = None
         if location:
@@ -337,11 +423,14 @@ class RubikaAdapter(BaseHTTPAdapter):
                 "longitude": float(location.get("longitude", 0)),
             }
 
+        # Media captions live in ``caption``; only plain text goes in ``text``
+        # so the sync engine picks the right field per message type.
         return IncomingMessage(
             message_id=str(msg.get("message_id", "")),
             chat_id=str(chat_id),
             from_user_id=str(msg.get("sender_id")) if msg.get("sender_id") else None,
-            text=text,
+            text=text if message_type == MessageType.TEXT else None,
+            caption=caption if message_type != MessageType.TEXT else None,
             message_type=message_type,
             file_id=file_id,
             file_name=file_info.get("file_name"),

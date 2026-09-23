@@ -25,6 +25,9 @@ os.environ["BALE_BOT_TOKEN"] = ""
 os.environ["RUBIKA_BOT_TOKEN"] = ""
 os.environ["EITAA_BOT_TOKEN"] = ""
 os.environ["MANAGER_BOT_TOKEN"] = ""
+# Disable the /RSAsecret gate for the existing test-suite; the gate itself is
+# covered by tests/test_access_gate.py which enables it explicitly.
+os.environ["MANAGER_ACCESS_SECRET"] = ""
 
 
 @pytest.fixture

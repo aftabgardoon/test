@@ -36,4 +36,4 @@ class MessageLog(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    sync_link: Mapped["SyncLink"] = relationship()
+    sync_link: Mapped["SyncLink"] = relationship()  # noqa: F821,UP037

@@ -62,6 +62,9 @@ async def run_worker() -> None:
         raise
     finally:
         await queue.close()
+        # Release the pooled HTTP clients and rate-limiter tasks owned by the
+        # cached destination adapters so the process exits cleanly.
+        await sync_service.close_cached_adapters()
 
 
 def main() -> None:

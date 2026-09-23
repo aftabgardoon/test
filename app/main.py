@@ -24,14 +24,22 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     tasks: list[asyncio.Task] = []
 
+    # Build the source-listening adapters ONCE: the same instances are used
+    # for the getMe warm-up and for the pollers, so nothing is leaked
+    # (every built adapter owns a pooled HTTP client + a rate-limiter task).
+    polling_adapters: dict = {}
+    if settings.polling_enabled:
+        from app.pollers import build_polling_adapters
+
+        polling_adapters = build_polling_adapters()
+
     # Warm-up: preload caches and warm HTTP connection pools.
-    from app.pollers import build_polling_adapters
     from app.services.cache_service import cache_service
 
     warm_started = asyncio.get_running_loop().time()
     async with get_session_factory()() as session:
         await cache_service.warm_up(session)
-    for platform, adapter in build_polling_adapters().items():
+    for platform, adapter in polling_adapters.items():
         if hasattr(adapter, "get_me"):
             try:
                 await adapter.get_me()
@@ -46,9 +54,8 @@ async def lifespan(app: FastAPI):
     if settings.polling_enabled:
         from app.pollers import start_all_pollers
 
-        adapters = build_polling_adapters()
-        if adapters:
-            tasks.extend(await start_all_pollers(adapters, get_session_factory()))
+        if polling_adapters:
+            tasks.extend(await start_all_pollers(polling_adapters, get_session_factory()))
         else:
             logger.warning("No source bot tokens configured; polling is idle")
 
@@ -69,6 +76,11 @@ async def lifespan(app: FastAPI):
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    for adapter in polling_adapters.values():
+        try:
+            await adapter.close()
+        except Exception:  # noqa: BLE001 - best-effort shutdown
+            pass
     await dispose_engine()
 
 

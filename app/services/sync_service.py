@@ -21,8 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.adapters import (
-    AdapterError,
     AbstractAdapter,
+    AdapterError,
     IncomingMessage,
     MessageType,
     build_adapter,
@@ -103,7 +103,9 @@ async def handle_incoming(
     Returns the number of destination links matched.
     """
     t_enqueued = time.perf_counter()
-    source = await cache_service.get_source_channel(session, platform, incoming.chat_id)
+    source = await cache_service.get_source_channel(
+        session, platform, incoming.chat_id, incoming.chat_username
+    )
     if source is None:
         logger.debug("No source channel for platform={} chat={}", platform, incoming.chat_id)
         return 0
@@ -271,9 +273,14 @@ async def _deliver(
     )
 
     if msg_type == MessageType.TEXT:
+        if not message.text:
+            # An empty text message cannot be delivered on any platform;
+            # fail fast with a clear reason instead of burning all retries
+            # on an opaque 400.
+            raise AdapterError("Text message has empty text; skipping")
         return await dest_adapter.send_message(
             dest_chat_id,
-            message.text or "",
+            message.text,
             parse_mode=message.parse_mode,
             reply_markup=reply_markup,
         )
@@ -300,7 +307,14 @@ async def _deliver(
 
     if msg_type == MessageType.POLL and message.poll:
         question = message.poll.get("question", "")
-        options = [o.get("text", "") for o in message.poll.get("options", [])]
+        # Bale/Telegram-style polls carry options as dicts ({text: ...});
+        # Rubika's Poll model carries plain strings (list[string]).  Both
+        # shapes have been seen in the wild, so handle both.
+        raw_options = message.poll.get("options", [])
+        options = [
+            o.get("text", "") if isinstance(o, dict) else str(o)
+            for o in raw_options
+        ]
         return await dest_adapter.send_poll(dest_chat_id, question, options)
 
     if message.text:
@@ -334,9 +348,11 @@ async def _send_media(
             chat_id, file_bytes, caption=caption, parse_mode=parse_mode, reply_markup=reply_markup
         )
     if message.message_type == MessageType.VOICE:
-        return await dest_adapter.send_voice(chat_id, file_bytes, caption=caption, reply_markup=reply_markup)
+        return await dest_adapter.send_voice(
+            chat_id, file_bytes, caption=caption, reply_markup=reply_markup
+        )
     if message.message_type == MessageType.AUDIO:
-        return await dest_adapter.send_document(
+        return await dest_adapter.send_audio(
             chat_id,
             file_bytes,
             filename=message.file_name or "audio",
@@ -372,6 +388,20 @@ async def _adapter_for(
     return adapter
 
 
+async def close_cached_adapters() -> None:
+    """Close every cached adapter (HTTP client + rate-limiter task).
+
+    Call at process shutdown so no ``Unclosed client`` warnings or dangling
+    refill tasks remain.  Safe to call when the cache is empty.
+    """
+    for adapter in list(_adapter_cache.values()):
+        try:
+            await adapter.close()
+        except Exception:  # noqa: BLE001 - best-effort shutdown
+            pass
+    _adapter_cache.clear()
+
+
 # ----------------------------------------------------------------------
 # Edit / delete propagation
 # ----------------------------------------------------------------------
@@ -380,9 +410,12 @@ async def handle_delete(
     platform: str,
     chat_id: str,
     message_id: str,
+    chat_username: str | None = None,
 ) -> int:
     """Delete the destination copies of a deleted source message."""
-    source = await cache_service.get_source_channel(session, platform, chat_id)
+    source = await cache_service.get_source_channel(
+        session, platform, chat_id, chat_username
+    )
     if source is None:
         return 0
     logs = await _logs_for_source_message(session, source.id, message_id)
@@ -409,9 +442,12 @@ async def handle_edit(
     chat_id: str,
     message_id: str,
     new_text: str,
+    chat_username: str | None = None,
 ) -> int:
     """Edit the destination copies of an edited source text message."""
-    source = await cache_service.get_source_channel(session, platform, chat_id)
+    source = await cache_service.get_source_channel(
+        session, platform, chat_id, chat_username
+    )
     if source is None:
         return 0
     logs = await _logs_for_source_message(session, source.id, message_id)

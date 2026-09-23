@@ -5,28 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from app.config import get_settings
-from app.pollers.base import BasePoller
+from app.pollers.base import BasePoller, extract_text_edit
 from app.services import sync_service
 
-# All update types relevant to channel synchronisation.
-ALLOWED_UPDATES = [
-    "message",
-    "channel_post",
-    "edited_message",
-    "edited_channel_post",
-    "callback_query",
-]
-
-
-def _extract_edit(update: dict[str, Any]) -> tuple[str, str, str] | None:
-    """Return ``(chat_id, message_id, new_text)`` for an edit update, if any."""
-    for key in ("edited_message", "edited_channel_post"):
-        msg = update.get(key)
-        if isinstance(msg, dict) and msg.get("text"):
-            chat_id = str((msg.get("chat") or {}).get("id", ""))
-            message_id = str(msg.get("message_id", ""))
-            return chat_id, message_id, msg["text"]
-    return None
+# Kept for backwards compatibility with tests that import it from here.
+_extract_edit = extract_text_edit
 
 
 class BalePoller(BasePoller):
@@ -38,10 +21,14 @@ class BalePoller(BasePoller):
 
     async def _get_updates(self) -> list[dict[str, Any]]:
         settings = get_settings()
+        # Note: Bale's documented ``getUpdates`` accepts only ``offset``,
+        # ``limit`` and ``timeout`` — there is no ``allowed_updates``
+        # parameter (unlike Telegram).  Sending it risks a 400 that would
+        # break the whole source poller, so we filter update types on the
+        # client side instead (see ``parse_update`` / ``_process_update``).
         updates = await self.adapter.get_raw_updates(  # type: ignore[attr-defined]
             offset=self._offset or None,
             timeout=settings.polling_timeout,
-            allowed_updates=ALLOWED_UPDATES,
         )
         for update in updates:
             update_id = update.get("update_id")
@@ -53,7 +40,7 @@ class BalePoller(BasePoller):
         """Handle edits explicitly to avoid re-posting them as new messages."""
         edit = _extract_edit(update)
         if edit is not None:
-            chat_id, message_id, new_text = edit
+            chat_id, message_id, new_text, chat_username = edit
             async with self._session_factory() as session:
                 await sync_service.handle_edit(
                     session,
@@ -61,6 +48,7 @@ class BalePoller(BasePoller):
                     chat_id,
                     message_id,
                     new_text,
+                    chat_username,
                 )
             return
         await super()._process_update(update)

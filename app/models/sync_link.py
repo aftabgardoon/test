@@ -47,8 +47,8 @@ class SyncLink(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    user: Mapped["User"] = relationship(back_populates="sync_links")
-    source_channel: Mapped["Channel"] = relationship(foreign_keys=[source_channel_id])
-    destination_channel: Mapped["Channel"] = relationship(
+    user: Mapped["User"] = relationship(back_populates="sync_links")  # noqa: F821,UP037
+    source_channel: Mapped["Channel"] = relationship(foreign_keys=[source_channel_id])  # noqa: F821,UP037
+    destination_channel: Mapped["Channel"] = relationship(  # noqa: F821,UP037
         foreign_keys=[destination_channel_id]
     )

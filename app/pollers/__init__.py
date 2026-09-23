@@ -32,6 +32,14 @@ def build_polling_adapters() -> dict[Platform, AbstractAdapter]:
 
     Only platforms with a non-empty token are returned. Eitaa is skipped by
     the caller because it cannot act as a source.
+
+    A platform whose listener token equals ``MANAGER_BOT_TOKEN`` is
+    deliberately skipped: two concurrent ``getUpdates`` consumers on the same
+    bot confirm each other's updates, so the manager loop and a dedicated
+    poller would silently steal updates (buttons and messages randomly
+    disappear).  In that case the manager loop is the sole consumer and also
+    forwards source-channel updates to the sync pipeline (see
+    ``app.bot_manager.manager.run_manager``).
     """
     settings = get_settings()
     tokens: dict[Platform, str] = {
@@ -41,8 +49,16 @@ def build_polling_adapters() -> dict[Platform, AbstractAdapter]:
     }
     adapters: dict[Platform, AbstractAdapter] = {}
     for platform, token in tokens.items():
-        if token:
-            adapters[platform] = build_adapter(platform, token)
+        if not token:
+            continue
+        if settings.manager_bot_token and token == settings.manager_bot_token:
+            logger.info(
+                "Skipping dedicated {} poller: its token is also the manager "
+                "bot token; the manager loop will consume its updates",
+                platform.value,
+            )
+            continue
+        adapters[platform] = build_adapter(platform, token)
     return adapters
 
 

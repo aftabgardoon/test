@@ -39,6 +39,14 @@ async def store_token(
         existing = BotToken(platform=platform, token=encrypted, owner_user_id=owner_user_id)
         session.add(existing)
     await session.commit()
+
+    # A replaced token must not survive in any cache: otherwise the worker
+    # keeps talking to the platform with the *old* credentials forever.
+    # (Local imports avoid a circular import at module load time.)
+    from app.services import cache_service, sync_service
+
+    cache_service.invalidate_token(platform, owner_user_id)
+    sync_service._adapter_cache.pop((platform, owner_user_id), None)
     return existing
 
 

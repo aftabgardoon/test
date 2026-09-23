@@ -39,4 +39,4 @@ class Channel(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    user: Mapped["User"] = relationship(back_populates="channels")
+    user: Mapped["User"] = relationship(back_populates="channels")  # noqa: F821,UP037

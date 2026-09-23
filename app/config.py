@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # --- Bot Manager ---
     manager_bot_token: str = ""
     manager_bot_platform: str = "bale"
+    # Secret that unlocks the manager bot UI.  Users must send
+    # "/RSAsecret <value>" (or just "/RSAsecret" when the value equals the
+    # default "RSAsecret") before they see any menu or reply.  Set to an empty
+    # string to disable the gate (everyone allowed).
+    manager_access_secret: str = "RSAsecret"
 
     # --- Source listener bots (used by the pollers) ---
     bale_bot_token: str = ""

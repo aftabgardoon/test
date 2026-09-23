@@ -30,9 +30,9 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    channels: Mapped[list["Channel"]] = relationship(
+    channels: Mapped[list["Channel"]] = relationship(  # noqa: F821,UP037
         back_populates="user", cascade="all, delete-orphan"
     )
-    sync_links: Mapped[list["SyncLink"]] = relationship(
+    sync_links: Mapped[list["SyncLink"]] = relationship(  # noqa: F821,UP037
         back_populates="user", cascade="all, delete-orphan"
     )

@@ -46,6 +46,17 @@ class EitaaAdapter(BaseHTTPAdapter):
     def _api_url(self, method: str) -> str:
         return f"{self.base_url}/{self.token}/{method}"
 
+    @staticmethod
+    def _normalize_chat_id(chat_id: str) -> str:
+        """Eitaa expects the channel id/username **without** a leading ``@``.
+
+        The eitaayar docs state that ``chat_id`` may be the channel's unique id
+        or its username *without* ``@`` (e.g. ``chat_id=eitaa``).  Users often
+        register the channel as ``@username``; strip the prefix here so the
+        same registration works on every platform.
+        """
+        return str(chat_id).lstrip("@")
+
     def _require_bytes(self, value: str | bytes) -> bytes:
         if isinstance(value, bytes):
             return value
@@ -62,7 +73,7 @@ class EitaaAdapter(BaseHTTPAdapter):
         caption: str | None = None,
     ) -> str:
         await self._limiter.acquire()
-        data: dict[str, str] = {"chat_id": chat_id}
+        data: dict[str, str] = {"chat_id": self._normalize_chat_id(chat_id)}
         if caption:
             data["caption"] = caption
         files = {"file": (filename, file_bytes)}
@@ -85,8 +96,12 @@ class EitaaAdapter(BaseHTTPAdapter):
             result = data.get("result") or {}
             if isinstance(result, dict) and result.get("message_id") is not None:
                 return str(result["message_id"])
-        # Some endpoints return the message id directly.
-        return str(data)
+            if data.get("message_id") is not None:
+                return str(data["message_id"])
+        # Some endpoints return the message id directly as a scalar.
+        if isinstance(data, (int, str)) and data != "":
+            return str(data)
+        raise AdapterError(f"Eitaa response contained no message_id: {str(data)[:200]}")
 
     async def send_message(
         self,
@@ -96,12 +111,14 @@ class EitaaAdapter(BaseHTTPAdapter):
         parse_mode: str | None = None,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> str:
-        # Eitaa ignores reply_markup; kept in the signature for interface parity.
-        del reply_markup
+        # Eitaa ignores reply_markup and has no documented parse_mode
+        # parameter; both are kept only for interface parity.
+        del reply_markup, parse_mode
         await self._limiter.acquire()
-        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
-        if parse_mode:
-            payload["parse_mode"] = parse_mode
+        payload: dict[str, Any] = {
+            "chat_id": self._normalize_chat_id(chat_id),
+            "text": text,
+        }
         try:
             resp = await self.client.post(self._api_url("sendMessage"), data=payload)
         except httpx.HTTPError as exc:
@@ -192,17 +209,12 @@ class EitaaAdapter(BaseHTTPAdapter):
         question: str,
         options: list[str],
     ) -> str:
-        await self._limiter.acquire()
-        payload: dict[str, Any] = {
-            "chat_id": chat_id,
-            "question": question,
-            "options": options,
-        }
-        try:
-            resp = await self.client.post(self._api_url("sendPoll"), data=payload)
-        except httpx.HTTPError as exc:
-            raise AdapterError(f"Eitaa sendPoll failed: {exc}") from exc
-        return self._extract_message_id(resp)
+        # The documented Eitaa API only exposes getMe/sendMessage/sendFile —
+        # there is no sendPoll method.  Render the poll as plain text instead
+        # of calling a non-existent endpoint (which failed every poll sync).
+        lines = [question or "نظرسنجی"]
+        lines.extend(f"{index}. {option}" for index, option in enumerate(options, start=1))
+        return await self.send_message(chat_id, "\n".join(lines))
 
     async def copy_message(
         self,

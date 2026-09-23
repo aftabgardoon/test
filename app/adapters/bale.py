@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+from loguru import logger
 
 from app.adapters.base import (
     AdapterError,
@@ -69,6 +70,27 @@ class BaleAdapter(BaseHTTPAdapter):
     def supports_copy_message(self) -> bool:
         return True
 
+    # ------------------------------------------------------------------
+    # Bale-specific request handling
+    # ------------------------------------------------------------------
+    async def _post(self, method: str, **kwargs: Any) -> dict[str, Any]:
+        """POST to Bale, dropping parameters Bale's API does not document.
+
+        * ``None`` values are removed — Telegram-style APIs reject unexpected
+          parameters (``caption: null``, ``reply_markup: null``, ...), and the
+          Bale docs state that an ``InlineKeyboardButton`` may carry *only one*
+          of its optional fields (``url`` / ``callback_data`` / ...).
+        * ``parse_mode`` is never sent: Bale renders *all* outgoing text as
+          Markdown and its method documentation defines no ``parse_mode``
+          parameter (sending it risks a 400 for the whole request).
+        """
+        clean: dict[str, Any] = {}
+        for key, value in kwargs.items():
+            if value is None or key == "parse_mode":
+                continue
+            clean[key] = value
+        return await super()._post(method, **clean)
+
     @property
     def supports_edit(self) -> bool:
         return True
@@ -95,7 +117,7 @@ class BaleAdapter(BaseHTTPAdapter):
         if parse_mode:
             payload["parse_mode"] = parse_mode
         if reply_markup:
-            payload["reply_markup"] = reply_markup.model_dump()
+            payload["reply_markup"] = reply_markup.model_dump(exclude_none=True)
         data = await self._post("sendMessage", **payload)
         return str(data["result"]["message_id"])
 
@@ -120,7 +142,7 @@ class BaleAdapter(BaseHTTPAdapter):
         if parse_mode:
             data["parse_mode"] = parse_mode
         if reply_markup:
-            data["reply_markup"] = reply_markup.model_dump()
+            data["reply_markup"] = reply_markup.model_dump(exclude_none=True)
 
         try:
             if isinstance(value, str):
@@ -218,18 +240,54 @@ class BaleAdapter(BaseHTTPAdapter):
             reply_markup=reply_markup,
         )
 
+    async def send_audio(
+        self,
+        chat_id: str,
+        file_id_or_bytes: str | bytes,
+        *,
+        filename: str | None = None,
+        caption: str | None = None,
+        parse_mode: str | None = None,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> str:
+        # Per the docs (sendAudio): the file must be .MP3 or .M4A and is
+        # shown in the client's music player (unlike a generic document).
+        return await self._send_media(
+            "sendAudio",
+            "audio",
+            chat_id,
+            file_id_or_bytes,
+            filename=filename or "audio.mp3",
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+
     async def send_sticker(
         self,
         chat_id: str,
         file_id_or_bytes: str | bytes,
     ) -> str:
-        return await self._send_media(
-            "sendSticker",
-            "sticker",
-            chat_id,
-            file_id_or_bytes,
-            filename="sticker.webp",
-        )
+        # sendSticker is not in Bale's documented method list.  Try it first
+        # (Bale is a Telegram-style API and may support it), then degrade
+        # gracefully so the sticker still reaches the destination as an
+        # image (photo) or, failing that, as a document.
+        try:
+            return await self._send_media(
+                "sendSticker",
+                "sticker",
+                chat_id,
+                file_id_or_bytes,
+                filename="sticker.webp",
+            )
+        except AdapterError as sticker_exc:
+            logger.debug("sendSticker failed ({}); falling back", sticker_exc)
+        try:
+            # Works with raw bytes (cross-platform) or a Bale file_id.
+            return await self.send_photo(chat_id, file_id_or_bytes)
+        except AdapterError as photo_exc:
+            logger.debug("photo fallback failed ({}); using document", photo_exc)
+        return await self.send_document(chat_id, file_id_or_bytes, filename="sticker.webp")
 
     async def send_location(
         self,
@@ -244,7 +302,7 @@ class BaleAdapter(BaseHTTPAdapter):
             chat_id=chat_id,
             latitude=latitude,
             longitude=longitude,
-            reply_markup=reply_markup.model_dump() if reply_markup else None,
+            reply_markup=reply_markup.model_dump(exclude_none=True) if reply_markup else None,
         )
         return str(data["result"]["message_id"])
 
@@ -254,13 +312,11 @@ class BaleAdapter(BaseHTTPAdapter):
         question: str,
         options: list[str],
     ) -> str:
-        data = await self._post(
-            "sendPoll",
-            chat_id=chat_id,
-            question=question,
-            options=options,
-        )
-        return str(data["result"]["message_id"])
+        # Bale's documented method list has no sendPoll — render the poll as
+        # plain text so poll messages are still delivered.
+        lines = [question or "نظرسنجی"]
+        lines.extend(f"{index}. {option}" for index, option in enumerate(options, start=1))
+        return await self.send_message(chat_id, "\n".join(lines))
 
     async def copy_message(
         self,
@@ -271,13 +327,17 @@ class BaleAdapter(BaseHTTPAdapter):
         caption: str | None = None,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> str:
+        # Bale's documented copyMessage takes EXACTLY chat_id / from_chat_id /
+        # message_id — no caption, no reply_markup.  The copy already carries
+        # the original message's caption and keyboard, so those parameters
+        # are accepted for interface parity but deliberately not sent
+        # (an undocumented parameter risks a 400 for the whole request).
+        del caption, reply_markup
         data = await self._post(
             "copyMessage",
             from_chat_id=from_chat_id,
             chat_id=chat_id,
             message_id=message_id,
-            caption=caption,
-            reply_markup=reply_markup.model_dump() if reply_markup else None,
         )
         return str(data["result"]["message_id"])
 
@@ -324,12 +384,10 @@ class BaleAdapter(BaseHTTPAdapter):
         allowed_updates: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Return raw update dicts (including ``callback_query`` events)."""
+        del allowed_updates  # Bale's getUpdates has no such parameter; ignored.
         params: dict[str, Any] = {"timeout": timeout}
         if offset is not None:
             params["offset"] = offset
-        if allowed_updates is not None:
-            # Telegram/Bale expect allowed_updates as a JSON-encoded array.
-            params["allowed_updates"] = _dumps(allowed_updates).decode("utf-8")
         data = await self._get("getUpdates", **params)
         return data.get("result", [])
 
@@ -346,7 +404,13 @@ class BaleAdapter(BaseHTTPAdapter):
         await self._post("answerCallbackQuery", **payload)
 
     def parse_update(self, update: dict[str, Any]) -> list[IncomingMessage]:
-        for key in ("message", "channel_post", "edited_message", "edited_channel_post"):
+        # Only *new* content is parsed here.  ``edited_message`` /
+        # ``edited_channel_post`` are deliberately excluded: text edits are
+        # routed to edit propagation by the poller / manager loop, and
+        # emitting non-text edits (e.g. a changed photo caption) as new
+        # messages would duplicate the post in destination channels (same
+        # design decision as the Rubika adapter).
+        for key in ("message", "channel_post"):
             if key in update and isinstance(update[key], dict):
                 return [self._parse_message(update[key])]
         return []
@@ -373,10 +437,12 @@ class BaleAdapter(BaseHTTPAdapter):
         document = msg.get("document") or {}
         sticker = msg.get("sticker") or {}
 
+        sender = msg.get("from") or {}
         return IncomingMessage(
             message_id=message_id,
             chat_id=chat_id,
-            from_user_id=str(msg["from"]["id"]) if msg.get("from") else None,
+            chat_username=chat.get("username"),
+            from_user_id=str(sender["id"]) if sender.get("id") is not None else None,
             text=msg.get("text"),
             caption=msg.get("caption"),
             message_type=message_type,

@@ -44,8 +44,13 @@ def log_user_event(platform: str, user_id: str, action: str, **extra: Any) -> No
 
     Example::
 
-        log_user_event("bale", "123", "addchannel", platform="bale", id="@foo")
+        log_user_event("bale", "123", "addchannel", channel_platform="bale", id="@foo")
     """
+    # Defensive: callers passing platform=/user_id=/action= as *extra* would
+    # raise TypeError (duplicate argument) and kill the surrounding handler —
+    # which historically broke the "channel added" confirmation.  Drop such
+    # keys instead of failing.
+    extra = {k: v for k, v in extra.items() if k not in ("platform", "user_id", "action")}
     parts = [f"{key}={value}" for key, value in extra.items()]
     suffix = f" | {' '.join(parts)}" if parts else ""
     logger.info(

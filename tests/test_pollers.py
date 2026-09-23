@@ -8,7 +8,7 @@ from typing import Any
 
 from app.adapters import EitaaAdapter, IncomingMessage, MessageType, Platform
 from app.pollers import BalePoller, build_polling_adapters, start_all_pollers
-from app.pollers.bale_poller import ALLOWED_UPDATES, _extract_edit
+from app.pollers.bale_poller import _extract_edit
 from app.services import sync_service
 
 
@@ -44,7 +44,15 @@ class _FakeBaleAdapter:
 
 def test_extract_edit() -> None:
     edit = {"edited_message": {"message_id": 5, "chat": {"id": 9}, "text": "x"}}
-    assert _extract_edit(edit) == ("9", "5", "x")
+    assert _extract_edit(edit) == ("9", "5", "x", None)
+    edit_named = {
+        "edited_message": {
+            "message_id": 5,
+            "chat": {"id": 9, "username": "chan"},
+            "text": "x",
+        }
+    }
+    assert _extract_edit(edit_named) == ("9", "5", "x", "chan")
     normal = {"message": {"message_id": 5, "chat": {"id": 9}, "text": "x"}}
     assert _extract_edit(normal) is None
 
@@ -61,7 +69,9 @@ async def test_bale_poller_advances_offset() -> None:
     assert poller.offset == 8
     assert adapter.calls[0]["offset"] is None  # first call has no offset
     assert adapter.calls[0]["timeout"] == 15
-    assert adapter.calls[0]["allowed_updates"] == ALLOWED_UPDATES
+    # Bale's documented getUpdates has no allowed_updates parameter; sending
+    # it risks a 400 that breaks the whole poller, so it must never be sent.
+    assert adapter.calls[0]["allowed_updates"] is None
 
 
 async def test_bale_poller_process_update(monkeypatch) -> None:
@@ -87,7 +97,9 @@ async def test_bale_poller_process_update(monkeypatch) -> None:
 async def test_bale_poller_handles_edit(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
-    async def fake_handle_edit(session, platform, chat_id, message_id, new_text):
+    async def fake_handle_edit(
+        session, platform, chat_id, message_id, new_text, chat_username=None
+    ):
         captured.update(chat_id=chat_id, message_id=message_id, new_text=new_text)
         return 1
 

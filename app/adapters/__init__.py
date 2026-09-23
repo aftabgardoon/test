@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from app.adapters.bale import BaleAdapter
 from app.adapters.base import (
-    AdapterError,
     AbstractAdapter,
+    AdapterError,
     IncomingMessage,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -12,7 +13,6 @@ from app.adapters.base import (
     Platform,
     TransientError,
 )
-from app.adapters.bale import BaleAdapter
 from app.adapters.eitaa import EitaaAdapter
 from app.adapters.rubika import RubikaAdapter
 from app.config import get_settings
@@ -50,6 +50,27 @@ def build_adapter(
     return adapter_cls(token=token, rps=rate, client=client)
 
 
+def platform_supports_source(platform: str | Platform) -> bool:
+    """Whether ``platform`` can act as a sync *source* (no network access).
+
+    Used by the manager bot to reject e.g. Eitaa channels as sources before
+    the user configures them.  Instantiating the adapter with a probe token
+    is safe: the HTTP client and the rate-limiter task are both created
+    lazily, so nothing is opened or leaked.
+    """
+    if isinstance(platform, str):
+        try:
+            key = Platform(platform)
+        except ValueError:
+            return False
+    else:
+        key = platform
+    adapter_cls = _ADAPTERS.get(key)
+    if adapter_cls is None:
+        return False
+    return adapter_cls("probe").supports_source
+
+
 __all__ = [
     "AbstractAdapter",
     "AdapterError",
@@ -63,4 +84,5 @@ __all__ = [
     "RubikaAdapter",
     "TransientError",
     "build_adapter",
+    "platform_supports_source",
 ]

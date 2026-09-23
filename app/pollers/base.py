@@ -30,8 +30,62 @@ EXPECTED_ERRORS = (
 )
 
 
+def extract_text_edit(update: dict[str, Any]) -> tuple[str, str, str, str | None] | None:
+    """Return ``(chat_id, message_id, new_text, chat_username)`` for a text edit.
+
+    Handles both Bale/Telegram style updates (``edited_message`` /
+    ``edited_channel_post``) and returns ``None`` for everything else.
+    """
+    for key in ("edited_message", "edited_channel_post"):
+        msg = update.get(key)
+        if isinstance(msg, dict) and msg.get("text"):
+            chat = msg.get("chat") or {}
+            chat_id = str(chat.get("id", ""))
+            message_id = str(msg.get("message_id", ""))
+            return chat_id, message_id, msg["text"], chat.get("username")
+    return None
+
+
+async def dispatch_sync_update(
+    adapter: AbstractAdapter,
+    session_factory: Callable,
+    update: dict[str, Any],
+) -> None:
+    """Feed one raw update to the sync engine.
+
+    Used by the pollers *and* by the manager bot loop (when the manager bot
+    shares its token with a source listener, it is the only consumer of
+    ``getUpdates`` for that bot and must also forward source-channel updates
+    to the sync pipeline).
+    """
+    edit = extract_text_edit(update)
+    if edit is not None:
+        chat_id, message_id, new_text, chat_username = edit
+        async with session_factory() as session:
+            await sync_service.handle_edit(
+                session,
+                adapter.platform.value,
+                chat_id,
+                message_id,
+                new_text,
+                chat_username,
+            )
+        return
+
+    for incoming in adapter.parse_update(update):
+        incoming = incoming.model_copy(update={"received_at": time.perf_counter()})
+        async with session_factory() as session:
+            await sync_service.handle_incoming(session, adapter.platform.value, incoming)
+
+
 class BasePoller(ABC):
     """Poll a platform adapter for new updates and feed them to the sync engine."""
+
+    #: Seconds to sleep after a *poll that returned nothing*.  Platforms whose
+    #: ``getUpdates`` blocks for a long-poll window (Bale) keep the default of
+    #: 0; platforms with immediate responses (Rubika) must set this so the loop
+    #: does not hammer the API at full speed.
+    poll_interval: float = 0.0
 
     def __init__(
         self,
@@ -67,8 +121,12 @@ class BasePoller(ABC):
             try:
                 updates = await self._get_updates()
                 self._consecutive_errors = 0  # reset backoff on success
-                for update in updates:
-                    self._dispatch(update)
+                if updates:
+                    for update in updates:
+                        self._dispatch(update)
+                elif self.poll_interval > 0:
+                    # No long-poll window on this platform: pace ourselves.
+                    await asyncio.sleep(self.poll_interval)
             except asyncio.CancelledError:
                 raise
             except EXPECTED_ERRORS as exc:

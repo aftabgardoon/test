@@ -8,7 +8,6 @@ after user mutations (add channel, create link, toggle link, store token).
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from loguru import logger
 from sqlalchemy import select
@@ -33,21 +32,47 @@ class CacheService:
     # Reads
     # ------------------------------------------------------------------
     async def get_source_channel(
-        self, session: AsyncSession, platform: str, platform_channel_id: str
+        self,
+        session: AsyncSession,
+        platform: str,
+        platform_channel_id: str,
+        chat_username: str | None = None,
     ) -> Channel | None:
-        """Return the active source channel for ``platform`` / channel id."""
-        key = (platform, str(platform_channel_id))
-        if key in self._source_channels:
-            return self._source_channels[key]
-        async with self._lock:
+        """Return the active source channel for ``platform`` / channel id.
+
+        The channel may have been registered as an ``@username`` while the
+        update carries the numeric id (or vice-versa); every candidate key is
+        checked before falling back to a database lookup.
+        """
+        keys = self._source_keys(platform, platform_channel_id, chat_username)
+        for key in keys:
             if key in self._source_channels:
                 return self._source_channels[key]
+        async with self._lock:
+            for key in keys:
+                if key in self._source_channels:
+                    return self._source_channels[key]
             channel = await channel_service.find_source_channel(
-                session, platform, platform_channel_id
+                session, platform, platform_channel_id, chat_username
             )
             if channel is not None:
-                self._source_channels[key] = channel
+                for key in keys:
+                    self._source_channels[key] = channel
             return channel
+
+    @staticmethod
+    def _source_keys(
+        platform: str, platform_channel_id: str, chat_username: str | None
+    ) -> list[tuple[str, str]]:
+        """Candidate cache keys for a source channel (id and/or username)."""
+        keys = [(platform, str(platform_channel_id))]
+        if chat_username:
+            username = str(chat_username).lstrip("@")
+            for candidate in ("@" + username, username):
+                key = (platform, candidate)
+                if key not in keys:
+                    keys.append(key)
+        return keys
 
     async def get_active_links_by_source(
         self, session: AsyncSession, source_id: int
@@ -159,6 +184,25 @@ class CacheService:
             len(tokens),
             elapsed,
         )
+
+    async def delete_channel(
+        session: AsyncSession,
+        channel_id: int,
+        user_id: int | None = None,
+    ) -> bool:
+        """Permanently delete a channel (and its links via cascade).
+
+        If ``user_id`` is provided, only deletes the channel when it belongs to
+        that user (prevents cross-user deletion).
+        """
+        channel = await session.get(Channel, channel_id)
+        if channel is None:
+            return False
+        if user_id is not None and channel.user_id != user_id:
+            return False
+        await session.delete(channel)
+        await session.commit()
+        return True
 
     # ------------------------------------------------------------------
     # Helpers

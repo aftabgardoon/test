@@ -4,6 +4,18 @@ from __future__ import annotations
 
 from app.adapters import InlineKeyboardButton, InlineKeyboardMarkup
 from app.models import Channel, SyncLink
+from app.models.channel import ChannelRole
+
+# Bale (like Telegram) caps inline button labels at 64 characters; longer
+# labels make the whole sendMessage request fail, so truncate defensively.
+MAX_BUTTON_TEXT = 64
+
+
+def _clamp(text: str) -> str:
+    """Truncate ``text`` to the platform button-label limit."""
+    if len(text) <= MAX_BUTTON_TEXT:
+        return text
+    return text[: MAX_BUTTON_TEXT - 1] + "…"
 
 # Callback data prefixes
 CMD_ADDCHANNEL = "cmd:addchannel"
@@ -55,7 +67,7 @@ def channel_picker(channels: list[Channel], prefix: str) -> InlineKeyboardMarkup
     rows = [
         [
             InlineKeyboardButton(
-                text=f"{c.title or c.platform_channel_id} ({c.platform})",
+                text=_clamp(f"{c.title or c.platform_channel_id} ({c.platform})"),
                 callback_data=f"{prefix}{c.id}",
             )
         ]
@@ -65,16 +77,53 @@ def channel_picker(channels: list[Channel], prefix: str) -> InlineKeyboardMarkup
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def my_channels_keyboard(channels: list[Channel]) -> InlineKeyboardMarkup:
+    """Return a keyboard listing the user's channels with a delete button."""
+    rows = []
+    for c in channels:
+        role = "مبدأ" if c.role == ChannelRole.SOURCE else "مقصد"
+        rows.append([
+            InlineKeyboardButton(
+                text=_clamp(f"{c.title or c.platform_channel_id} ({c.platform}) — {role}"),
+                callback_data=f"noop:{c.id}",
+            ),
+            InlineKeyboardButton(
+                text="🗑 حذف",
+                callback_data=f"del_channel:{c.id}",
+            ),
+        ])
+    rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def confirm_delete_keyboard(channel_id: int) -> InlineKeyboardMarkup:
+    """Return a yes/no confirmation keyboard for channel deletion."""
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="✅ بله، حذف کن",
+                callback_data=f"confirm_del:{channel_id}",
+            ),
+            InlineKeyboardButton(
+                text="❌ انصراف",
+                callback_data="cancel_del",
+            ),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def link_picker(links: list[SyncLink]) -> InlineKeyboardMarkup:
     """Return a keyboard listing sync links as toggle buttons."""
     rows = []
     for link in links:
         state = "✅" if link.is_active else "⏸"
+        src = link.source_channel.title or link.source_channel_id
+        dst = link.destination_channel.title or link.destination_channel_id
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{state} {link.id}: {link.source_channel.title or link.source_channel_id} → "
-                    f"{link.destination_channel.title or link.destination_channel_id}",
+                    text=_clamp(f"{state} {link.id}: {src} → {dst}"),
                     callback_data=f"{LINK_PREFIX}{link.id}",
                 )
             ]
